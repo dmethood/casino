@@ -1,0 +1,513 @@
+// Licensed Casino Platform - Local Development Schema
+// Simplified for SQLite compatibility
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// =====================================================
+// USER MANAGEMENT & AUTHENTICATION
+// =====================================================
+
+model User {
+  id                 String   @id @default(cuid())
+  email              String   @unique
+  firstName          String
+  lastName           String
+  hashedPassword     String
+  passwordSalt       String
+  role               String   @default("PLAYER") // ADMIN, COMPLIANCE_OFFICER, RISK_MANAGER, CUSTOMER_SUPPORT, PLAYER
+  status             String   @default("ACTIVE") // ACTIVE, SUSPENDED, BANNED, CLOSED, PENDING_VERIFICATION
+  registeredAt       DateTime @default(now())
+  lastLoginAt        DateTime?
+  emailVerified      Boolean  @default(false)
+  emailVerifiedAt    DateTime?
+  phoneNumber        String?
+  phoneVerified      Boolean  @default(false)
+  dateOfBirth        DateTime?
+  nationality        String?
+  preferredLanguage  String   @default("en")
+  timezone           String?
+  marketingConsent   Boolean  @default(false)
+  termsAcceptedAt    DateTime?
+  privacyAcceptedAt  DateTime?
+  twoFactorEnabled   Boolean  @default(false)
+  twoFactorSecret    String?
+  backupCodes        String? // JSON string
+  sessionToken       String?
+  sessionExpiresAt   DateTime?
+  failedLoginAttempts Int     @default(0)
+  lockedUntil        DateTime?
+  updatedAt          DateTime @updatedAt
+
+  // Relationships
+  kycProfile         KycProfile?
+  wallet            Wallet?
+  rgProfile         ResponsibleGamblingProfile?
+  sessions          UserSession[]
+  auditLogs         AuditLog[]
+  complianceAlerts  ComplianceAlert[]
+  posts             Post[]
+  transactions      PaymentTransaction[]
+  supportTickets    SupportTicket[]
+  
+  @@map("users")
+}
+
+model UserSession {
+  id           String   @id @default(cuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sessionToken String   @unique
+  ipAddress    String
+  userAgent    String?
+  location     String?
+  isActive     Boolean  @default(true)
+  expiresAt    DateTime
+  createdAt    DateTime @default(now())
+  lastActivity DateTime @default(now())
+
+  @@map("user_sessions")
+}
+
+// =====================================================
+// KYC & COMPLIANCE
+// =====================================================
+
+model KycProfile {
+  id                 String    @id @default(cuid())
+  userId             String    @unique
+  user               User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  status             String    @default("NOT_STARTED") // NOT_STARTED, DOCUMENTS_REQUESTED, DOCUMENTS_SUBMITTED, UNDER_REVIEW, ADDITIONAL_INFO_REQUIRED, APPROVED, REJECTED, EXPIRED
+  tier               String    @default("TIER_0") // TIER_0, TIER_1, TIER_2, TIER_3
+  riskLevel          String    @default("MEDIUM") // LOW, MEDIUM, HIGH, CRITICAL
+  jurisdiction       String
+  documentsRequired  String? // JSON string
+  verificationId     String?   @unique
+  verificationResults String? // JSON string (encrypted)
+  approved           Boolean   @default(false)
+  approvedAt         DateTime?
+  approvedBy         String?
+  rejectedAt         DateTime?
+  rejectionReason    String?
+  lastScreened       DateTime?
+  nextScreeningDue   DateTime?
+  amlRiskLevel       String    @default("MEDIUM") // LOW, MEDIUM, HIGH, CRITICAL
+  complianceFlags    String? // JSON string
+  notes              String? // JSON string
+  retentionUntil     DateTime?
+  createdAt          DateTime  @default(now())
+  lastUpdated        DateTime  @updatedAt
+
+  // Relationships
+  documents          KycDocument[]
+  screeningResults   AmlScreeningResult[]
+
+  @@map("kyc_profiles")
+}
+
+model KycDocument {
+  id                  String         @id @default(cuid())
+  kycProfileId        String
+  kycProfile          KycProfile     @relation(fields: [kycProfileId], references: [id], onDelete: Cascade)
+  documentType        String // PASSPORT, DRIVING_LICENSE, NATIONAL_ID, UTILITY_BILL, BANK_STATEMENT, SELFIE
+  documentCountry     String
+  documentNumber      String?
+  frontImageUrl       String?
+  backImageUrl        String?
+  selfieUrl           String?
+  extractedData       String? // JSON string (encrypted)
+  verificationStatus  String         @default("NOT_STARTED")
+  verificationResults String? // JSON string
+  submittedAt         DateTime       @default(now())
+  verifiedAt          DateTime?
+  expiresAt           DateTime?
+  retentionUntil      DateTime
+  provider            String?
+  providerId          String?
+
+  @@map("kyc_documents")
+}
+
+model AmlScreeningResult {
+  id                 String     @id @default(cuid())
+  kycProfileId       String
+  kycProfile         KycProfile @relation(fields: [kycProfileId], references: [id], onDelete: Cascade)
+  screeningId        String     @unique
+  status             String // CLEAR, POTENTIAL_MATCH, MATCH, ERROR, PENDING
+  sanctionsCheck     Boolean    @default(false)
+  pepCheck           Boolean    @default(false)
+  adverseMediaCheck  Boolean    @default(false)
+  riskLevel          String // LOW, MEDIUM, HIGH, CRITICAL
+  matches            String // JSON string
+  provider           String
+  providerId         String?
+  screenedAt         DateTime   @default(now())
+  nextScreeningDue   DateTime?
+
+  @@map("aml_screening_results")
+}
+
+// =====================================================
+// PAYMENTS & WALLETS
+// =====================================================
+
+model Wallet {
+  id               String   @id @default(cuid())
+  userId           String   @unique
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  balance          Float    @default(0) // Using Float instead of Decimal for SQLite
+  currency         String   @default("USD")
+  status           String   @default("ACTIVE") // ACTIVE, SUSPENDED, FROZEN, CLOSED
+  frozenAmount     Float    @default(0)
+  lastTransaction  DateTime?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  // Relationships
+  transactions     WalletTransaction[]
+  bets             Bet[]
+  deposits         PaymentTransaction[] @relation("Deposits")
+  withdrawals      PaymentTransaction[] @relation("Withdrawals")
+
+  @@map("wallets")
+}
+
+model WalletTransaction {
+  id          String              @id @default(cuid())
+  walletId    String
+  wallet      Wallet              @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  amount      Float // Using Float instead of Decimal
+  type        String // DEPOSIT, WITHDRAWAL, BET_STAKE, BET_PAYOUT, BONUS_CREDIT, etc.
+  reason      String
+  referenceId String?
+  balanceBefore Float
+  balanceAfter  Float
+  metadata    String? // JSON string
+  createdAt   DateTime            @default(now())
+
+  @@map("wallet_transactions")
+}
+
+model PaymentTransaction {
+  id                String            @id @default(cuid())
+  userId            String
+  user              User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  walletId          String?
+  depositWallet     Wallet?           @relation("Deposits", fields: [walletId], references: [id])
+  withdrawalWallet  Wallet?           @relation("Withdrawals", fields: [walletId], references: [id])
+  type              String // DEPOSIT, WITHDRAWAL
+  status            String // PENDING, PROCESSING, COMPLETED, FAILED, CANCELLED, CHARGEBACK
+  amount            Float // Using Float instead of Decimal
+  currency          String
+  provider          String // STRIPE, AIRWALLEX, BANK_TRANSFER, CRYPTO
+  providerId        String?
+  paymentMethodId   String?
+  paymentMethodType String? // CREDIT_CARD, DEBIT_CARD, BANK_ACCOUNT, E_WALLET, CRYPTO_WALLET
+  cardLast4         String?
+  cardBrand         String?
+  threeDSecure      Boolean           @default(false)
+  riskScore         Int?
+  feeAmount         Float?
+  netAmount         Float
+  processingStarted DateTime?
+  processedAt       DateTime?
+  failedAt          DateTime?
+  failureReason     String?
+  chargebackAt      DateTime?
+  chargebackAmount  Float?
+  metadata          String? // JSON string
+  ipAddress         String
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+
+  @@map("payment_transactions")
+}
+
+// =====================================================
+// GAMING & CASINO
+// =====================================================
+
+model GameRound {
+  id            String      @id @default(cuid())
+  game          String // VEGETABLES, DICE, SLOTS, CRASH, etc.
+  state         String      @default("OPEN") // OPEN, SETTLING, CLOSED, CANCELLED
+  serverSeed    String?
+  serverSeedHash String?
+  clientSeed    String?
+  nonce         Int         @default(0)
+  rngProvider   String?
+  rtpTarget     Float?
+  rtpActual     Float?
+  resultJson    String // JSON string
+  startedAt     DateTime    @default(now())
+  settledAt     DateTime?
+  jurisdiction  String?
+  
+  // Relationships
+  bets          Bet[]
+  
+  @@map("game_rounds")
+}
+
+model Bet {
+  id          String    @id @default(cuid())
+  roundId     String
+  round       GameRound @relation(fields: [roundId], references: [id], onDelete: Cascade)
+  walletId    String
+  wallet      Wallet    @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  stake       Float // Using Float instead of Decimal
+  payout      Float     @default(0)
+  selection   String // JSON string
+  odds        Float?
+  status      String    @default("PENDING") // PENDING, WON, LOST, CANCELLED, REFUNDED
+  placedAt    DateTime  @default(now())
+  settledAt   DateTime?
+  jurisdiction String?
+  
+  @@map("bets")
+}
+
+// =====================================================
+// RESPONSIBLE GAMBLING
+// =====================================================
+
+model ResponsibleGamblingProfile {
+  id                    String    @id @default(cuid())
+  userId                String    @unique
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  // Limits (using Float for SQLite)
+  dailyDepositLimit     Float?
+  weeklyDepositLimit    Float?
+  monthlyDepositLimit   Float?
+  dailyLossLimit        Float?
+  weeklyLossLimit       Float?
+  monthlyLossLimit      Float?
+  
+  // Time Limits
+  dailyTimeLimit        Int?
+  sessionTimeLimit      Int?
+  
+  // Reality Checks
+  realityCheckInterval  Int       @default(60)
+  lastRealityCheck      DateTime?
+  
+  // Cooling Off & Self-Exclusion
+  coolingOffUntil       DateTime?
+  selfExcludedUntil     DateTime?
+  selfExclusionType     String? // COOLING_OFF_24H, COOLING_OFF_72H, etc.
+  
+  // Status
+  status                String    @default("ACTIVE") // ACTIVE, COOLING_OFF, SELF_EXCLUDED
+  mandatory             Boolean   @default(false)
+  jurisdiction          String?
+  
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+  
+  // Relationships
+  sessions              GamingSession[]
+  alerts                RgAlert[]
+  
+  @@map("responsible_gambling_profiles")
+}
+
+model GamingSession {
+  id          String    @id @default(cuid())
+  rgProfileId String
+  rgProfile   ResponsibleGamblingProfile @relation(fields: [rgProfileId], references: [id], onDelete: Cascade)
+  startedAt   DateTime  @default(now())
+  endedAt     DateTime?
+  duration    Int?
+  totalStaked Float     @default(0)
+  totalWon    Float     @default(0)
+  netResult   Float     @default(0)
+  gamesPlayed Int       @default(0)
+  ipAddress   String
+  
+  @@map("gaming_sessions")
+}
+
+model RgAlert {
+  id          String    @id @default(cuid())
+  rgProfileId String
+  rgProfile   ResponsibleGamblingProfile @relation(fields: [rgProfileId], references: [id], onDelete: Cascade)
+  alertType   String // DEPOSIT_LIMIT_APPROACHED, DEPOSIT_LIMIT_EXCEEDED, etc.
+  severity    String // LOW, MEDIUM, HIGH, CRITICAL
+  message     String
+  triggered   Boolean   @default(true)
+  acknowledged Boolean  @default(false)
+  acknowledgedAt DateTime?
+  createdAt   DateTime  @default(now())
+  
+  @@map("rg_alerts")
+}
+
+// =====================================================
+// COMPLIANCE & AUDIT
+// =====================================================
+
+model ComplianceAlert {
+  id          String         @id @default(cuid())
+  userId      String?
+  user        User?          @relation(fields: [userId], references: [id])
+  alertType   String // KYC_REQUIRED, KYC_FAILED, AML_MATCH, etc.
+  severity    String // LOW, MEDIUM, HIGH, CRITICAL
+  title       String
+  description String
+  details     String? // JSON string
+  status      String         @default("OPEN") // OPEN, INVESTIGATING, RESOLVED, ESCALATED, CLOSED
+  assignedTo  String?
+  priority    Int            @default(50)
+  dueDate     DateTime?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+  resolvedAt  DateTime?
+  resolution  String?
+  
+  @@map("compliance_alerts")
+}
+
+model AuditLog {
+  id        String    @id @default(cuid())
+  userId    String?
+  user      User?     @relation(fields: [userId], references: [id])
+  action    String
+  resource  String?
+  resourceId String?
+  details   String // JSON string (encrypted)
+  ipAddress String
+  userAgent String?
+  sessionId String?
+  outcome   String // SUCCESS, FAILURE, PARTIAL
+  riskScore Int?
+  createdAt DateTime  @default(now())
+  
+  @@map("audit_logs")
+}
+
+// =====================================================
+// CONTENT MANAGEMENT
+// =====================================================
+
+model Post {
+  id          String   @id @default(cuid())
+  slug        String   @unique
+  title       String
+  titleAr     String?
+  excerpt     String
+  excerptAr   String?
+  content     String
+  contentAr   String?
+  coverImage  String?
+  published   Boolean  @default(false)
+  authorId    String
+  author      User     @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("posts")
+}
+
+model Service {
+  id            String   @id @default(cuid())
+  name          String
+  nameAr        String?
+  slug          String   @unique
+  description   String
+  descriptionAr String?
+  price         Float?
+  image         String?
+  active        Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@map("services")
+}
+
+model ContactMessage {
+  id        String   @id @default(cuid())
+  name      String
+  email     String
+  subject   String
+  message   String
+  locale    String
+  read      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@map("contact_messages")
+}
+
+// =====================================================
+// SYSTEM CONFIGURATION
+// =====================================================
+
+model SystemConfig {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  value       String
+  type        String   @default("STRING") // STRING, NUMBER, BOOLEAN, JSON
+  encrypted   Boolean  @default(false)
+  description String?
+  updatedBy   String?
+  updatedAt   DateTime @updatedAt
+  createdAt   DateTime @default(now())
+  
+  @@map("system_config")
+}
+
+model License {
+  id              String    @id @default(cuid())
+  jurisdiction    String
+  licenseNumber   String
+  licenseType     String // CASINO, SPORTS_BETTING, LOTTERY, COMBINED
+  issuer          String
+  issuedDate      DateTime
+  validFrom       DateTime
+  validUntil      DateTime
+  status          String    @default("ACTIVE") // ACTIVE, SUSPENDED, REVOKED, EXPIRED, PENDING_RENEWAL
+  publicUrl       String?
+  verificationUrl String?
+  conditions      String? // JSON string
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  @@unique([jurisdiction, licenseNumber])
+  @@map("licenses")
+}
+
+// =====================================================
+// SUPPORT SYSTEM
+// =====================================================
+
+model SupportTicket {
+  id              String        @id @default(cuid())
+  ticketNumber    String        @unique
+  userId          String?
+  user            User?         @relation(fields: [userId], references: [id])
+  guestEmail      String?
+  category        String
+  priority        String        @default("MEDIUM") // LOW, MEDIUM, HIGH, URGENT, CRITICAL
+  status          String        @default("OPEN") // OPEN, IN_PROGRESS, WAITING_CUSTOMER, etc.
+  subject         String
+  description     String
+  tags            String? // JSON string
+  assignedTo      String?
+  slaDeadline     DateTime?
+  escalatedAt     DateTime?
+  resolvedAt      DateTime?
+  closedAt        DateTime?
+  resolution      String?
+  satisfactionRating Int?
+  metadata        String? // JSON string
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  @@map("support_tickets")
+}

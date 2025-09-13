@@ -1,0 +1,13 @@
+# https://www.robotstxt.org/robotstxt.html
+User-agent: *
+Allow: /
+
+# Sitemap
+Sitemap: http://localhost:3000/sitemap.xml
+
+# Disallow admin and private areas
+Disallow: /dashboard
+Disallow: /api/
+Disallow: /signin
+Disallow: /signup
+Disallow: /uploads/
